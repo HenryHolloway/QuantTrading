@@ -13,4 +13,4 @@ To trade with Robinhood, create a python file called rh_api, containing a variab
 
 During the Coronavirus 2020 Crash, the algorithm gained approiximately ~0.22% during 2/19-4/13 compared to $SPY which returned negative 18.53% in the same period. This also beat any other method of investing I was using during this time (including the robinhood version of this same algorithm.)
 
-![alt text](https://raw.githubusercontent.com/HenryHolloway/QuantTrading/master/New%20Project.png")
+![profit chart]("https://raw.githubusercontent.com/HenryHolloway/QuantTrading/master/New%20Project.png")
