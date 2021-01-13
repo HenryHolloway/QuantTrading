@@ -1,5 +1,5 @@
 #  ********************* STONKS *********************
-stockList = ['AMD', 'GDX', 'MU', 'EEM', 'XLF', 'BAC']
+stockList = ['GME', 'CDE', 'NIO', 'OXY', 'SPWR', 'APA']
 #  **************************************************
 
 
@@ -17,16 +17,9 @@ import numpy as np
 
 import yfinance as yf
 
-from notify_run import Notify
-notify = Notify()
-
-import requests
+import wirepusher_api as wp_api
 
 # *********** ALPACA API SETUP ***********
-import os
-os.environ['APCA_API_BASE_URL']='https://paper-api.alpaca.markets'
-
-
 import alpaca_api as keys #keyID secretKey
 import alpaca_trade_api as tradeapi
 
@@ -42,17 +35,10 @@ try:
 
 except:
     print("Cannot trade with alpaca.")
+    wp_api.sendMessage("Alert!", "Cannot trade with alpaca.")
     tradingAlpaca = False
 # ****************************************
 
-# **** ROBINHOOD UNNOFICIAL API SETUP ****
-import rh_api as info
-from Robinhood import Robinhood
-myTrader = Robinhood()
-tradingRH = myTrader.login(username = info.username, password = info.password, qr_code = info.qr)
-
-print("Trading with RH: " , tradingRH)
-# ****************************************
 
 
 
@@ -123,6 +109,7 @@ def getEMAslope(data, period=13):
     ema = ema.dropna()
     iroc = ema.diff() / 1
     return iroc
+
 def checkEMAslope(data, period=13):
     ema = getEMA(data)
 
@@ -148,6 +135,7 @@ def bbp(data):
     up, mid, low = BBANDS(close, timeperiod=20, nbdevup=2, nbdevdn=2, matype=0)
     bbp = (price['Close'] - low) / (up - low)
     return bbp
+
 def getBBP(data):
     stock_bbp = bbp(data)
     stock_bbp = stock_bbp.tail(1)
@@ -194,6 +182,8 @@ def processStock(stopEvent, stock=""):
     
     now = datetime.datetime.now()
 
+    stockBoughtToday = False
+
     if stock != "":
         fil = stock + ".action"
         fo = open(fil, "a")
@@ -209,48 +199,25 @@ def processStock(stopEvent, stock=""):
         if stock != "":
             fil = stock + ".action"
             fo = open(fil, "a")
-            fo.write("\n" + stock + "   -   Current time is: " + now.strftime('%H:%M:%S %d-%m-%Y') + "\n\n")
+            fo.write("\n\n" + stock + "   -   Current time is: " + now.strftime('%H:%M:%S %d-%m-%Y') + "\n\n")
 
 
 
+            initBuy = False
+            initSell = False
 
-            tFilePath = os.path.join(os.getcwd(), "SP", "{}_Buying".format(stock))
-
-            if os.path.isfile(tFilePath):
-                ft = open(tFilePath, "r")
-                initBuy = ft.readline()
-                ft.close()
-
-            else:
-                initBuy = "False"
-                ft = open(tFilePath, "w")
-                ft.write(initBuy)
-                ft.close()
-
-
-
-            sFilePath = os.path.join(os.getcwd(), "SP", "{}_Selling".format(stock))
-
-            if os.path.isfile(sFilePath):
-                fs = open(sFilePath, "r")
-                initSell = fs.readline()
-                fs.close()
-
-            else:
-                initSell = "False"
-                fs = open(tFilePath, "w")
-                fs.write(initSell)
-                fs.close()
 
             
 
 ############
             avgPrice_stock = 1
+            alpacaSharesOwned = 2
 
             positions = api.list_positions()
             for p in positions:
                 if p.symbol == stock:
                     avgPrice_stock = float(p.avg_entry_price)
+                    alpacaSharesOwned = int(p.qty)
 
             
 
@@ -282,21 +249,18 @@ def processStock(stopEvent, stock=""):
             fo.write("BBP is " + str(stock_bbp) + '\n')
 
 ############
-############
+############    
 
-            if avgPrice_stock == 1 or avgPrice_stock > stock_price: #SEEKING TO BUY stock
+            if (avgPrice_stock == 1 or ((avgPrice_stock - (avgPrice_stock * .01)) > stock_price)) and ((stock_price*alpacaSharesOwned) < float(account.regt_buying_power)) and (alpacaSharesOwned < 16): #SEEKING TO BUY stock
                 fo.write("Seeking to buy " + stock)
-                if initBuy == "False":
+                if initBuy == False:
                     if stock_rsi <= 30 and -.1 < stock_bbp <= .05:
                         print("Can buy " + stock)
                         fo.write(now.strftime("%H:%M:%S") + " -- Can buy " + stock)
-                        initBuy = "True"
-                        ft = open(tFilePath, "w")
-                        ft.write(initBuy)
-                        ft.close()
+                        initBuy = True
 
 
-                while initBuy == "True" and not stopEvent.is_set():
+                while initBuy == True and not stopEvent.is_set():
                     try:
                         stock_data = getData(stock)
                     except:
@@ -318,19 +282,15 @@ def processStock(stopEvent, stock=""):
                         continue
 
 
-                    print("Checking EMA to find a good time to buy " + stock)
+                    print("\nChecking EMA to find a good time to buy " + stock)
+                    fo.write("\nChecking EMA to find a good time to buy " + stock)
                     check = checkEMAslope(stock_data)
                 
                     if check == "Increasing" or check == "Flat":
                         print("EMA is flat or increasing for " + stock + ". Buying...")
 
 
-                        ### PRICE ACTION ###
-                        positions = api.list_positions()
-                        alpacaSharesOwned = 1
-                        for p in positions:
-                            if p.symbol == stock:
-                                alpacaSharesOwned = int(p.qty)
+                        
 
 
                         #
@@ -338,12 +298,13 @@ def processStock(stopEvent, stock=""):
                             try:
                                 
                                 api.submit_order(stock, alpacaSharesOwned, side='buy', type='market', time_in_force='day')
+                                messageType = "stockBuy"
+
+                                stockBoughtToday = True
 
                                 try:
-                                    initBuy = "False"
-                                    ft  = open(tFilePath, "w")
-                                    ft.write(initBuy)
-                                    ft.close()
+                                    initBuy = False
+
 
                                 except:
                                     fo.write("Buy variable assignment/ writing failed.")
@@ -351,58 +312,22 @@ def processStock(stopEvent, stock=""):
 
 
                                 ### MESSAGING ###
-                                messageBody = 'Alpaca - Bought ' + alpacaSharesOwned + ' shares of ' + stock + ' -- RSI @ {0}, BBP @ {1} - PRICE @ {2}'.format(stock_rsi, stock_bbp, stock_price)
+                                messageBody = 'Alpaca - Bought ' + str(alpacaSharesOwned) + ' shares of ' + stock + ' -- RSI @ {0}, BBP @ {1} - PRICE @ {2}'.format(stock_rsi, stock_bbp, stock_price)
                                 messageTitle = 'Alpaca Bought {}'.format(stock)
                         
 
                                 ###
 
                                 
-                            except:
+                            except Exception as e:
                                 messageTitle = "Alpaca Trading Failed"
-                                messageBody = "Alpaca buying " + stock + " has failed. Continuing."
+                                messageBody = "Alpaca buying " + stock + " has failed. Continuing. Error: " + str(e)
+                                messageType = "error"
                                 
 
-                            notify.send(messageBody)
                             fo.write('\n\n' + messageBody)
-                            requests.get('http://wirepusher.com/send?id=mpgJL&title=' + messageTitle + '&message=' + messageBody)
+                            wp_api.sendMessage(messageTitle, messageBody, messageType)
                             print(messageBody)
-
-
-                        #
-                        if tradingRH == True:
-                            try:
-                                stockInstrument = myTrader.instruments(stock)[0]
-                                askP = (stock_price + (stock_price * .005))
-                                askP = float(truncate(askP, 2))
-                                myTrader.place_buy_order(stockInstrument, 1, ask_price=askP)
-
-
-                                ### MESSAGING ###
-                                messageBody = 'RH - Bought 1 share of ' + stock + ' -- RSI @ {0}, BBP @ {1} - PRICE @ {2}'.format(stock_rsi, stock_bbp, stock_price)
-                                messageTitle = 'Robinhood Bought {}'.format(stock)
-                        
-                                notify.send(messageBody)
-                                fo.write('\n\n' + messageBody)
-                                requests.get('http://wirepusher.com/send?id=mpgJL&title=' + messageTitle + '&message=' + messageBody)
-                                print(messageBody)
-                                ###
-                                
-                            except:
-                                messageBody = "Robinhood buying " + stock + " has failed. Continuing."
-                                messageTitle = "RH Trading Failed"
-                                print(messageBody)
-                                fo.write('\n\n' + messageBody)
-                                notify.send(messageBody)
-                                requests.get('http://wirepusher.com/send?id=mpgJL&title=' + messageTitle + '&message=' + messageBody)
-                                pass
-
-
-
-
-
-                        
-
 
 
                         break
@@ -413,128 +338,77 @@ def processStock(stopEvent, stock=""):
             
             
             #
-            elif avgPrice_stock < stock_price and avgPrice_stock != 1: #SEEKING TO SELL stocks
-                fo.write("Seeking to sell " + stock)
+            elif (avgPrice_stock < stock_price and avgPrice_stock != 1) and stockBoughtToday == False: #SEEKING TO SELL stocks
+                
                 percentGain = float(((stock_price - avgPrice_stock)/avgPrice_stock)*100)
                 pGain = "{:.3}".format(percentGain)
+                fo.write("Seeking to sell " + stock + "for " + pGain + "percent gain." )
+
+
 
                 if (stock_rsi >= 60 and stock_bbp >= .9) or (stock_rsi >= 67):
                     print("Can sell " + stock)
-                    initSell = "True"
-                    fs = open(sFilePath, "w")
-                    fs.write(initSell)
-                    fs.close()
+                    initSell = True
+
 
 
             
-                if initSell == "True" and percentGain >= .05:
-                    while initSell == "True" and not stopEvent.is_set():
-                        try:
-                            stock_data = getData(stock)
-                        except:
-                            print("Failed to get data for " + stock + ". Retrying 20 times...")
-                            fo.write("Failed to get data for " + stock + ". Retrying 20 times...")
-                            dataTries = 0
-                            while dataTries < 20:
-                                try:
-                                    stock_data = getData(stock)
-                                    print("Successfully got data for " + stock + ".")
-                                    break
-                                except:
-                                    dataTries += 1
-                                    time.sleep(.25)
+                if initSell == True and percentGain >= .5:
+                    while initSell == True and not stopEvent.is_set():
+                        # try:
+                        #     stock_data = getData(stock)
+                        # except:
+                        #     print("Failed to get data for " + stock + ". Retrying 20 times...")
+                        #     fo.write("Failed to get data for " + stock + ". Retrying 20 times...")
+                        #     dataTries = 0
+                        #     while dataTries < 20:
+                        #         try:
+                        #             stock_data = getData(stock)
+                        #             print("Successfully got data for " + stock + ".")
+                        #             break
+                        #         except:
+                        #             dataTries += 1
+                        #             time.sleep(.25)
 
-                            print("20  retries failed... Continuing...")
-                            fo.write("20  retries failed... Continuing...")
-                            continue
+                        #     print("20  retries failed... Continuing...")
+                        #     fo.write("20  retries failed... Continuing...")
+                        #     continue
 
-                        print("Checking EMA to find a good time to sell " + stock)
-                        check = checkEMAslope(stock_data)
+                        # print("Checking EMA to find a good time to sell " + stock)
+                        # fo.write("\nChecking EMA to find a good time to sell " + stock)
+                        # check = checkEMAslope(stock_data)
                     
-                        if check == "Decreasing" or check == "Flat":
-                            print("EMA is \'" + check + "\' for " + stock + ". Selling...")
-                            fo.write("EMA is \'" + check + "\' for " + stock + ". Selling...")
+                    
+                        ### PRICE ACTION ###                        
+                        positions = api.list_positions()
+                        alpacaSharesOwned = 0
+                        for p in positions:
+                            if p.symbol == stock:
+                                alpacaSharesOwned = int(p.qty)
+                        #
+                        if tradingAlpaca == True and alpacaSharesOwned != 0:
+                            try:
                                 
-                            ### PRICE ACTION ###                        
-                            positions = api.list_positions()
-                            alpacaSharesOwned = 0
-                            for p in positions:
-                                if p.symbol == stock:
-                                    alpacaSharesOwned = int(p.qty)
-                            #
-                            if tradingAlpaca == True and alpacaSharesOwned != 0:
-                                try:
-                                    
-                                    api.submit_order(stock, alpacaSharesOwned, side='sell', type='market', time_in_force='day')
+                                api.submit_order(stock, alpacaSharesOwned, side='sell', type='market', time_in_force='day')
+                                messageType = "stockSell"
 
-                                    try:
-                                        initSell = "False"
-                                        fs = open(sFilePath, "w")
-                                        fs.write(initSell)
-                                        fs.close()
+                                initSell = False
 
-                                    except:
-                                        fo.write("Sell variable assignment/writing failed.")
-                                        print("Sell variable assignment/writing failed.")
+                                messageBody = 'Alpaca - Sold ' + stock + ' ' + pGain + ' Percent Gain -- RSI @ {0}, BBP @ {1} - PRICE @ {2}'.format(stock_rsi, stock_bbp, stock_price)
+                                messageTitle = 'Aplaca Sold {}'.format(stock)
+
+                            except Exception as e:
+                                messageTitle = "Alpaca Trading Failed"
+                                messageBody = "Alpaca selling " + stock + " has failed. Continuing. Error: " + str(e)
+                                messageType = "error"
 
 
-                                    messageBody = 'Alpaca - Sold ' + stock + ' ' + pGain + ' Percent Gain -- RSI @ {0}, BBP @ {1} - PRICE @ {2}'.format(stock_rsi, stock_bbp, stock_price)
-                                    messageTitle = 'Aplaca Sold {}'.format(stock)
+                            ### MESSAGING ###
+                            fo.write('\n\n' + messageBody)
+                            wp_api.sendMessage(messageTitle, messageBody, messageType)
+                            print(messageBody)
+                            ###
 
-                                except:
-                                    messageTitle = "Alpaca Trading Failed"
-                                    messageBody = "Alpaca selling " + stock + " has failed. Continuing."
-
-
-                                ### MESSAGING ###
-                                notify.send(messageBody)
-                                fo.write('\n\n' + messageBody)
-                                requests.get('http://wirepusher.com/send?id=mpgJL&title=' + messageTitle + '&message=' + messageBody)
-                                print(messageBody)
-                                ###
-
-
-                            #
-                            if tradingRH == True:
-                                try:
-                                    stockInstrument = myTrader.instruments(stock)[0]
-                                    positions = myTrader.positions()
-                                    sellShares = 0
-                                    for i in range(0, len(positions['results'])):
-                                        if positions['results'][i]['instrument'] == stockInstrument['url']:
-                                            ownSharesRH = True
-                                            sellShares = positions['results'][i]['quantity']
-
-                                    if ownSharesRH:
-                                        bidP = (stock_price - (stock_price * .005))
-                                        bidP = float(truncate(bidP, 2))
-                                        myTrader.place_sell_order(stockInstrument, sellShares, bid_price=bidP)
-                                        
-                                        messageBody = 'RH Sold ' + stock + '.'
-                                        messageTitle = 'Robinhood Sold {}'.format(stock)
-
-                                        notify.send(messageBody)
-                                        fo.write('\n\n' + messageBody)
-                                        requests.get('http://wirepusher.com/send?id=mpgJL&title=' + messageTitle + '&message=' + messageBody)
-                                        print(messageBody)
-                                    
-                                except:
-                                    messageTitle = "RH Trading Failed"
-                                    messageBody = "Robinhood selling " + stock + "has failed. Continuing."
-                                    print(messageBody)
-                                    fo.write('\n\n' + messageBody)
-                                    notify.send(messageBody)
-                                    requests.get('http://wirepusher.com/send?id=mpgJL&title=' + messageTitle + '&message=' + messageBody)
-                                    pass
-
-
-
-
-                        
-                        else:
-                            print("EMA is \'" , check , "\' for " + stock + ". Waiting 15 seconds and trying again...")
-
-                        time.sleep(15)
 
                     
 
@@ -548,10 +422,12 @@ def processStock(stopEvent, stock=""):
 
 def main():
     now = datetime.datetime.now()
-    print("Starting up! Current time is + " + str(now))
+    print("Starting up! Current time is :" + str(now))
 
     clock = api.get_clock()
-    print('The market is {}'.format('open.' if clock.is_open else 'closed.'))
+    morningMessage = 'The market is {}'.format('open.' if clock.is_open else 'closed.')
+    print(morningMessage)
+    wp_api.sendMessage("Good Morning!", morningMessage, "goodMorning")
 
     while not clock.is_open:
         clock = api.get_clock()
